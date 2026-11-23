@@ -1,6 +1,8 @@
-const FINAL = /submit|apply|send application|complete application/i;
-const NOT_FINAL = /next|continue|back|previous|cancel|save draft/i;
-const SUCCESS = /thank you|application (has been )?submitted|successfully submitted|we received your application|application received|your application was sent/i;
+const FINAL = /\b(submit|send application|complete application|finish application)\b/i;
+const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
+const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|your application (has been |was )?submitted|application (has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (have )?received your application|application received|your application (was|has been) sent|you(?:'|’)ve applied|you have applied|application complete/i;
+
+let armedUntil = 0;
 
 function domainOf(url) {
   try {
@@ -51,6 +53,7 @@ function collect() {
     const key = `${name || label}:${type}`;
     captured.set(key, { key, label: label || name || 'Field', name, value: value.slice(0, 20000) });
   }
+  if (captured.size === 0) return;
   chrome.runtime.sendMessage({
     type: 'fields',
     domain,
@@ -66,12 +69,12 @@ function controlText(element) {
 
 function isFinalSubmit(element) {
   const text = controlText(element);
-  if (NOT_FINAL.test(text) && !FINAL.test(text)) return false;
-  if (element instanceof HTMLInputElement && element.type === 'submit' && !NOT_FINAL.test(text)) return true;
+  if (!text || NOT_FINAL.test(text)) return false;
   return FINAL.test(text);
 }
 
 function arm() {
+  armedUntil = Date.now() + 20000;
   chrome.runtime.sendMessage({
     type: 'arm',
     domain: domainOf(location.href),
@@ -80,9 +83,29 @@ function arm() {
   });
 }
 
-function looksSuccessful() {
-  const text = document.body ? document.body.innerText.slice(0, 8000) : '';
-  return SUCCESS.test(text) || SUCCESS.test(location.href);
+function confirmationSnippet() {
+  const source = `${document.title}\n${location.href}\n${document.body ? document.body.innerText.slice(0, 20000) : ''}`;
+  const match = source.match(CONFIRMATION);
+  if (!match || match.index == null) return '';
+  const start = Math.max(0, match.index - 40);
+  return source.slice(start, match.index + match[0].length + 80).replace(/\s+/g, ' ').trim();
+}
+
+let reportedConfirmation = false;
+
+function reportConfirmation() {
+  if (reportedConfirmation) return;
+  const confirmation = confirmationSnippet();
+  if (!confirmation) return;
+  reportedConfirmation = true;
+  chrome.runtime.sendMessage({
+    type: 'success',
+    domain: domainOf(location.href),
+    url: location.href,
+    title: document.title,
+    confirmation,
+    reason: 'confirmation',
+  });
 }
 
 document.addEventListener('input', () => collect(), true);
@@ -93,20 +116,9 @@ document.addEventListener('click', (event) => {
 }, true);
 document.addEventListener('submit', (event) => {
   const submitter = event.submitter;
-  if (submitter && !isFinalSubmit(submitter)) return;
+  if (!submitter || !isFinalSubmit(submitter)) return;
   arm();
 }, true);
-
-window.addEventListener('message', (event) => {
-  if (event.source !== window || event.data?.source !== 'application-track') return;
-  chrome.runtime.sendMessage({
-    type: 'success',
-    domain: domainOf(location.href),
-    url: location.href,
-    title: document.title,
-    reason: 'http',
-  });
-});
 
 const hook = document.createElement('script');
 hook.src = chrome.runtime.getURL('page-hook.js');
@@ -115,12 +127,14 @@ hook.async = false;
 hook.onload = () => hook.remove();
 
 collect();
-if (looksSuccessful()) {
-  chrome.runtime.sendMessage({
-    type: 'success',
-    domain: domainOf(location.href),
-    url: location.href,
-    title: document.title,
-    reason: 'page',
-  });
-}
+reportConfirmation();
+let confirmationTimer = 0;
+const confirmationObserver = new MutationObserver(() => {
+  if (reportedConfirmation) {
+    confirmationObserver.disconnect();
+    return;
+  }
+  clearTimeout(confirmationTimer);
+  confirmationTimer = setTimeout(reportConfirmation, 300);
+});
+confirmationObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
