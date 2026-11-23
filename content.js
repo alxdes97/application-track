@@ -1,8 +1,19 @@
 const FINAL = /\b(submit|send application|complete application|finish application)\b/i;
 const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
-const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|your application (has been |was )?submitted|application (has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (have )?received your application|application received|your application (was|has been) sent|you(?:'|’)ve applied|you have applied|application complete/i;
+const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps/i;
 
 let armedUntil = 0;
+
+function isEmbedLocation() {
+  const host = location.hostname;
+  const path = location.pathname;
+  if (/(^|\.)recaptcha\.net$/i.test(host)) return true;
+  if (/(^|\.)google\.com$/i.test(host) && /recaptcha/i.test(path)) return true;
+  if (/(^|\.)gstatic\.com$/i.test(host)) return true;
+  if (/(^|\.)hcaptcha\.com$/i.test(host)) return true;
+  if (/(^|\.)cloudflare\.com$/i.test(host) && /challenge|turnstile/i.test(path)) return true;
+  return false;
+}
 
 function domainOf(url) {
   try {
@@ -83,21 +94,46 @@ function arm() {
   });
 }
 
+function pageText() {
+  const chunks = [];
+  let size = 0;
+  const limit = 30000;
+  function walk(node) {
+    if (!node || size >= limit) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      chunks.push(node.textContent || '');
+      size += (node.textContent || '').length;
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = node.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
+    }
+    if (node.shadowRoot) walk(node.shadowRoot);
+    for (const child of node.childNodes) walk(child);
+  }
+  walk(document.body || document.documentElement);
+  return chunks.join(' ');
+}
+
 function confirmationSnippet() {
-  const source = `${document.title}\n${location.href}\n${document.body ? document.body.innerText.slice(0, 20000) : ''}`;
+  const source = `${document.title}\n${location.href}\n${pageText()}`.replace(/\s+/g, ' ');
   const match = source.match(CONFIRMATION);
   if (!match || match.index == null) return '';
   const start = Math.max(0, match.index - 40);
-  return source.slice(start, match.index + match[0].length + 80).replace(/\s+/g, ' ').trim();
+  return source.slice(start, match.index + match[0].length + 80).trim();
 }
 
 let reportedConfirmation = false;
+let reporting = false;
 
 function reportConfirmation() {
-  if (reportedConfirmation) return;
+  if (reportedConfirmation || reporting) return;
   const confirmation = confirmationSnippet();
   if (!confirmation) return;
-  reportedConfirmation = true;
+  reporting = true;
+  collect();
   chrome.runtime.sendMessage({
     type: 'success',
     domain: domainOf(location.href),
@@ -105,36 +141,58 @@ function reportConfirmation() {
     title: document.title,
     confirmation,
     reason: 'confirmation',
+  }, (response) => {
+    reporting = false;
+    if (chrome.runtime.lastError || !response?.ok) return;
+    reportedConfirmation = true;
   });
 }
 
-document.addEventListener('input', () => collect(), true);
-document.addEventListener('change', () => collect(), true);
-document.addEventListener('click', (event) => {
-  const target = event.target instanceof Element ? event.target.closest('button, input[type="submit"], [role="button"]') : null;
-  if (target && isFinalSubmit(target)) arm();
-}, true);
-document.addEventListener('submit', (event) => {
-  const submitter = event.submitter;
-  if (!submitter || !isFinalSubmit(submitter)) return;
-  arm();
-}, true);
+if (!isEmbedLocation()) {
+  document.addEventListener('input', () => collect(), true);
+  document.addEventListener('change', () => collect(), true);
+  document.addEventListener('click', (event) => {
+    collect();
+    const target = event.target instanceof Element ? event.target.closest('button, input[type="submit"], [role="button"]') : null;
+    if (target && isFinalSubmit(target)) arm();
+    setTimeout(reportConfirmation, 400);
+    setTimeout(reportConfirmation, 1500);
+  }, true);
+  document.addEventListener('submit', (event) => {
+    const submitter = event.submitter;
+    if (!submitter || !isFinalSubmit(submitter)) return;
+    arm();
+  }, true);
 
-const hook = document.createElement('script');
-hook.src = chrome.runtime.getURL('page-hook.js');
-hook.async = false;
-(document.documentElement || document.head).appendChild(hook);
-hook.onload = () => hook.remove();
+  const hook = document.createElement('script');
+  hook.src = chrome.runtime.getURL('page-hook.js');
+  hook.async = false;
+  (document.documentElement || document.head).appendChild(hook);
+  hook.onload = () => hook.remove();
 
-collect();
-reportConfirmation();
-let confirmationTimer = 0;
-const confirmationObserver = new MutationObserver(() => {
-  if (reportedConfirmation) {
-    confirmationObserver.disconnect();
-    return;
-  }
-  clearTimeout(confirmationTimer);
-  confirmationTimer = setTimeout(reportConfirmation, 300);
-});
-confirmationObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  collect();
+  reportConfirmation();
+  let confirmationQueued = false;
+  const confirmationObserver = new MutationObserver(() => {
+    if (reportedConfirmation || confirmationQueued) return;
+    confirmationQueued = true;
+    setTimeout(() => {
+      confirmationQueued = false;
+      reportConfirmation();
+    }, 250);
+  });
+  confirmationObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+  });
+  const confirmationPoll = setInterval(() => {
+    if (reportedConfirmation) {
+      clearInterval(confirmationPoll);
+      confirmationObserver.disconnect();
+      return;
+    }
+    reportConfirmation();
+  }, 1000);
+}

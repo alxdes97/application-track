@@ -2,6 +2,94 @@ const sessions = new Map();
 const tabArmed = new Map();
 const syncTimers = new Map();
 
+function isEmbedUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const path = parsed.pathname;
+    if (/(^|\.)recaptcha\.net$/i.test(host)) return true;
+    if (/(^|\.)google\.com$/i.test(host) && /recaptcha/i.test(path)) return true;
+    if (/(^|\.)gstatic\.com$/i.test(host)) return true;
+    if (/(^|\.)hcaptcha\.com$/i.test(host)) return true;
+    if (/(^|\.)cloudflare\.com$/i.test(host) && /challenge|turnstile/i.test(path)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function cleanUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if ((parsed.protocol === 'https:' && parsed.port === '443') || (parsed.protocol === 'http:' && parsed.port === '80')) {
+      parsed.port = '';
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function fullJobUrl(url) {
+  const cleaned = cleanUrl(url);
+  if (!cleaned || isEmbedUrl(cleaned)) return '';
+  try {
+    const parsed = new URL(cleaned);
+    if (/(^|\.)greenhouse\.io$/i.test(parsed.hostname) && /\/embed\/job_app/i.test(parsed.pathname)) {
+      const board = parsed.searchParams.get('for') || '';
+      const token = parsed.searchParams.get('token') || '';
+      if (/^[\w.-]+$/.test(board) && /^[\w.-]+$/.test(token)) {
+        return `https://job-boards.greenhouse.io/${board}/jobs/${token}`;
+      }
+    }
+    if (!parsed.pathname || parsed.pathname === '/') return '';
+    return cleaned;
+  } catch {
+    return '';
+  }
+}
+
+function urlRank(url) {
+  if (!url) return 0;
+  try {
+    const host = new URL(url).hostname;
+    if (/(^|\.)greenhouse\.io$/i.test(host) && /\/jobs\/[^/?#]+/i.test(url)) return 100;
+    if (/(^|\.)greenhouse\.io$/i.test(host)) return 90;
+    if (/(^|\.)lever\.co$/i.test(host) || /myworkdayjobs\.com$/i.test(host) || /(^|\.)ashbyhq\.com$/i.test(host)) return 80;
+  } catch {
+    return 0;
+  }
+  return 10;
+}
+
+async function jobPageUrl(sender, message) {
+  const urls = [];
+  if (sender?.tab?.url) urls.push(sender.tab.url);
+  if (message?.url) urls.push(String(message.url));
+  if (sender?.tab?.id != null) {
+    try {
+      const frames = await chrome.webNavigation.getAllFrames({ tabId: sender.tab.id });
+      for (const frame of frames || []) {
+        if (frame.url) urls.push(frame.url);
+      }
+    } catch {
+      // The tab URL is still available when frame lookup is blocked.
+    }
+  }
+  let best = '';
+  let bestRank = 0;
+  for (const candidate of urls) {
+    const cleaned = fullJobUrl(candidate);
+    const score = urlRank(cleaned);
+    if (score > bestRank) {
+      best = cleaned;
+      bestRank = score;
+    }
+  }
+  return best;
+}
+
 function pageKey(url) {
   try {
     const parsed = new URL(url);
@@ -27,8 +115,15 @@ function forgetTab(tabId) {
 
 chrome.tabs.onRemoved.addListener(forgetTab);
 
+function usableTitle(title) {
+  const value = String(title || '').trim();
+  if (!value || /recaptcha|hcaptcha|turnstile/i.test(value)) return '';
+  return value;
+}
+
 function ensureSession(tabId, url, title) {
   const key = sessionKey(tabId, url);
+  const nextTitle = usableTitle(title);
   let session = sessions.get(key);
   if (!session || session.closed) {
     session = {
@@ -36,7 +131,7 @@ function ensureSession(tabId, url, title) {
       key,
       pageKey: pageKey(url),
       url: url || '',
-      title: title || '',
+      title: nextTitle,
       fields: {},
       closed: false,
       touched: Date.now(),
@@ -44,7 +139,7 @@ function ensureSession(tabId, url, title) {
     sessions.set(key, session);
   } else {
     session.url = url || session.url;
-    session.title = title || session.title;
+    session.title = nextTitle || usableTitle(session.title);
     session.touched = Date.now();
   }
   return session;
@@ -64,10 +159,12 @@ function latestOpenSession(tabId) {
   return latestWithFields || latest;
 }
 
-function rememberFields(tabId, message) {
-  const url = String(message.url || '');
+async function rememberFields(tabId, message, sender) {
+  const url = await jobPageUrl(sender, message);
   if (!pageKey(url)) return 0;
-  const session = ensureSession(tabId, url, message.title);
+  const frameUrl = String(message.url || '');
+  const title = frameUrl && isEmbedUrl(frameUrl) ? '' : message.title;
+  const session = ensureSession(tabId, url, title);
   for (const field of message.fields || []) {
     if (!field?.key || !field.value) continue;
     session.fields[field.key] = {
@@ -87,6 +184,30 @@ function scheduleSync(tabId, session) {
     syncTimers.delete(session.key);
     send(tabId, session, false);
   }, 800));
+}
+
+function jobLabel(session) {
+  const titled = Object.values(session.fields || {}).find((field) => /job title|position|role/i.test(`${field.label} ${field.name}`));
+  if (titled?.value) return titled.value;
+  if (session.title && !/recaptcha/i.test(session.title)) return session.title;
+  return 'Job application';
+}
+
+function notifyApplied(session) {
+  let host = '';
+  try {
+    host = new URL(session.url).hostname.replace(/^www\./, '');
+  } catch {
+    host = '';
+  }
+  const label = jobLabel(session);
+  chrome.notifications.create(`applied-${session.id}`, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    title: '1 job applied',
+    message: host ? `${label} — ${host}` : label,
+    priority: 2,
+  }).catch(() => {});
 }
 
 async function send(tabId, session, submitted) {
@@ -116,7 +237,7 @@ async function send(tabId, session, submitted) {
         sessionId: session.id,
         url: session.url,
         domain,
-        pageTitle: session.title,
+        pageTitle: usableTitle(session.title),
         fields,
         submitted,
       }),
@@ -129,6 +250,7 @@ async function send(tabId, session, submitted) {
     if (submitted) {
       session.closed = true;
       tabArmed.delete(tabId);
+      notifyApplied(session);
     }
     await chrome.storage.local.set({
       connected: true,
@@ -145,30 +267,51 @@ async function send(tabId, session, submitted) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id;
   if (message?.type === 'fields' && tabId != null) {
-    sendResponse({ count: rememberFields(tabId, message) });
-    return false;
+    rememberFields(tabId, message, sender).then((count) => sendResponse({ count }));
+    return true;
   }
   if (message?.type === 'arm' && tabId != null) {
-    const session = ensureSession(tabId, message.url, message.title);
-    tabArmed.set(tabId, { key: session.key, until: Date.now() + 20000 });
-    sendResponse({ ok: true });
-    return false;
+    jobPageUrl(sender, message).then((url) => {
+      if (!url) {
+        sendResponse({ ok: false });
+        return;
+      }
+      const session = ensureSession(tabId, url, isEmbedUrl(message.url || '') ? '' : message.title);
+      tabArmed.set(tabId, { key: session.key, until: Date.now() + 20000 });
+      sendResponse({ ok: true });
+    });
+    return true;
   }
   if (message?.type === 'success' && tabId != null) {
-    const armed = tabArmed.get(tabId);
-    let session = armed ? sessions.get(armed.key) : null;
-    if (!session || session.closed) session = latestOpenSession(tabId);
-    if (!session) session = ensureSession(tabId, message.url, message.title);
-    if (message.confirmation) {
-      session.fields.confirmation = {
-        label: 'Confirmation',
-        name: 'confirmation',
-        value: String(message.confirmation).slice(0, 500),
-      };
-    }
-    const pending = syncTimers.get(session.key);
-    if (pending) clearTimeout(pending);
-    send(tabId, session, true).then(sendResponse);
+    jobPageUrl(sender, message).then((url) => {
+      if (!url) {
+        sendResponse({ ok: false, reason: 'embed' });
+        return;
+      }
+      const armed = tabArmed.get(tabId);
+      let session = armed ? sessions.get(armed.key) : null;
+      if (!session || session.closed) session = latestOpenSession(tabId);
+      if (!session || (pageKey(url) && pageKey(url) !== session.pageKey && urlRank(url) > urlRank(session.url))) {
+        const next = ensureSession(tabId, url, session?.title || message.title);
+        if (session) {
+          next.fields = { ...session.fields, ...next.fields };
+          session.closed = true;
+        }
+        session = next;
+      } else {
+        session.url = url;
+      }
+      if (message.confirmation) {
+        session.fields.confirmation = {
+          label: 'Confirmation',
+          name: 'confirmation',
+          value: String(message.confirmation).slice(0, 500),
+        };
+      }
+      const pending = syncTimers.get(session.key);
+      if (pending) clearTimeout(pending);
+      send(tabId, session, true).then(sendResponse);
+    });
     return true;
   }
   if (message?.type === 'status') {

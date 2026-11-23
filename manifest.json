@@ -20,7 +20,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "webNavigation", "notifications"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [
     {
