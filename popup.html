@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Application Track</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <strong>Application Track</strong>
+      <span class="signal">
+        <span id="connection" class="dot" title="Not connected"></span>
+        <span id="connection-label">Not connected</span>
+      </span>
+    </header>
+    <p id="signal-detail" class="hint">The light is green when this extension can reach the server with your submitter account.</p>
+
+    <section id="setup">
+      <label>
+        Server
+        <input id="api-url" type="url" value="http://213.59.112.27:5000" autocomplete="url" />
+      </label>
+      <label>
+        Email
+        <input id="email" type="email" autocomplete="username" />
+      </label>
+      <label>
+        Password
+        <input id="password" type="password" autocomplete="current-password" />
+      </label>
+      <button id="sign-in" type="button">Sign in</button>
+      <p id="setup-status" class="status"></p>
+    </section>
+
+    <section id="main" hidden>
+      <p id="who" class="hint"></p>
+      <p id="watching" class="hint">Waiting for an application form.</p>
+      <p id="last" class="status"></p>
+      <button id="sign-out" class="text" type="button">Sign out</button>
+    </section>
+    <script src="popup.js"></script>
+  </body>
+</html>
