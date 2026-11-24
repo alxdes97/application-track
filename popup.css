@@ -89,6 +89,18 @@ button.text {
   color: #9a3412;
 }
 
+.download {
+  margin: 0 0 8px;
+  color: #475569;
+}
+
+.download a {
+  display: block;
+  margin-top: 2px;
+  color: #0f766e;
+  word-break: break-all;
+}
+
 .hint,
 .status {
   color: #64748b;

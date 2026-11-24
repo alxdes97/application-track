@@ -293,6 +293,7 @@ async function send(tabId, session, submitted) {
 
 const EXTENSION_KEY = 'application-track';
 const DEFAULT_ORIGIN = 'http://213.59.112.27:5000';
+const DOWNLOAD_URL = 'https://github.com/alxdes97/application-track/archive/refs/heads/main.zip';
 
 async function checkExtensionVersion() {
   const installed = chrome.runtime.getManifest().version;
@@ -320,7 +321,7 @@ async function checkExtensionVersion() {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title: 'Update Application Track',
-      message: `This copy is v${installed}. Install v${payload.version}.`,
+      message: `This copy is v${installed}. Install v${payload.version}. ${DOWNLOAD_URL}`,
       priority: 2,
     }).catch(() => {});
   } catch {
