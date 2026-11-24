@@ -1,6 +1,6 @@
-const FINAL = /\b(submit|send application|complete application|finish application)\b/i;
+const FINAL = /\b(submit|sent|send application|complete application|finish application)\b/i;
 const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
-const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps/i;
+const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|thank you for reaching out|thanks for reaching out|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps|we will be in touch|we(?:'|’)ll be in touch/i;
 
 let armedUntil = 0;
 let preArmConfirmation = '';
