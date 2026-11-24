@@ -128,10 +128,18 @@ function controlText(element) {
   return `${element.innerText || ''} ${element.value || ''} ${element.getAttribute('aria-label') || ''}`.trim();
 }
 
+function isSubmitControl(element) {
+  const type = (element.getAttribute('type') || '').toLowerCase();
+  const tag = element.tagName;
+  if (type === 'submit' && (tag === 'INPUT' || tag === 'BUTTON')) return true;
+  return tag === 'BUTTON' && !type && !!element.closest('form');
+}
+
 function isFinalSubmit(element) {
   const text = controlText(element);
-  if (!text || NOT_FINAL.test(text)) return false;
-  return FINAL.test(text);
+  if (text && NOT_FINAL.test(text)) return false;
+  if (text && FINAL.test(text)) return true;
+  return isSubmitControl(element);
 }
 
 function isButtonLike(element) {
