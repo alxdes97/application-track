@@ -23,25 +23,46 @@ function domainOf(url) {
   }
 }
 
+function cleanText(value) {
+  return String(value || '').replace(/\s+/g, ' ').replace(/\s*\*\s*/g, ' ').trim();
+}
+
 function labelFor(element) {
-  if (element.id) {
-    const label = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
-    if (label && label.innerText.trim()) return label.innerText.trim();
-  }
+  const option = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null;
+  const optionText = cleanText(option?.innerText);
+  const legend = cleanText(element.closest('fieldset')?.querySelector('legend')?.innerText);
+  if (legend && optionText && legend !== optionText) return `${legend}: ${optionText}`.slice(0, 180);
+  if (optionText) return optionText.slice(0, 180);
+  const upload = cleanText(element.closest('.file-upload')?.querySelector('.upload-label, .label')?.innerText);
+  if (upload) return upload.slice(0, 180);
   const wrapping = element.closest('label');
   if (wrapping) {
-    const text = wrapping.innerText.replace(element.value || '', '').trim();
-    if (text) return text;
+    const text = cleanText(wrapping.innerText.replace(element.value || '', ''));
+    if (text) return text.slice(0, 180);
   }
-  return element.getAttribute('aria-label') || element.getAttribute('placeholder') || '';
+  return cleanText(element.getAttribute('aria-label') || element.getAttribute('placeholder')).slice(0, 180);
+}
+
+function customSelectValue(element) {
+  const root = element.closest('.select__control, .select, .select__container');
+  if (!root) return '';
+  const chosen = root.querySelectorAll('.select__single-value, .select__multi-value__label');
+  return [...chosen].map((node) => cleanText(node.innerText)).filter(Boolean).join(', ');
 }
 
 function fieldValue(element) {
+  const chosen = customSelectValue(element);
+  if (chosen) return chosen;
   if (element instanceof HTMLSelectElement) {
     return [...element.selectedOptions].map((option) => option.text.trim() || option.value).filter(Boolean).join(', ');
   }
+  if (element instanceof HTMLInputElement && element.type === 'file') {
+    return [...(element.files || [])].map((file) => file.name).filter(Boolean).join(', ');
+  }
   if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
-    return element.checked ? element.value || 'yes' : '';
+    if (!element.checked) return '';
+    const option = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null;
+    return cleanText(option?.innerText) || element.value || 'yes';
   }
   return element.value || '';
 }
@@ -55,13 +76,15 @@ function collect() {
   for (const element of controls) {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) continue;
     const type = (element.getAttribute('type') || element.tagName).toLowerCase();
-    if (['password', 'hidden', 'file', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
+    if (['password', 'hidden', 'submit', 'button', 'image', 'reset', 'search'].includes(type)) continue;
+    if (element.closest('.iti__dropdown-content, .grecaptcha-badge, .picker-dialog')) continue;
+    if (element.classList.contains('g-recaptcha-response')) continue;
     const name = element.getAttribute('name') || element.id || '';
-    if (/csrf|authenticity|token/i.test(name)) continue;
+    if (/csrf|authenticity|token|recaptcha/i.test(name)) continue;
     const label = labelFor(element).slice(0, 180);
     const value = fieldValue(element).trim();
     if (!value && !label && !name) continue;
-    const key = `${name || label}:${type}`;
+    const key = `${name || label}:${type}:${element.id || ''}`;
     captured.set(key, { key, label: label || name || 'Field', name, value: value.slice(0, 20000) });
   }
   if (captured.size === 0) return;
@@ -190,6 +213,7 @@ if (!isEmbedLocation()) {
     confirmationQueued = true;
     setTimeout(() => {
       confirmationQueued = false;
+      collect();
       reportConfirmation();
     }, 250);
   });
@@ -205,6 +229,7 @@ if (!isEmbedLocation()) {
       confirmationObserver.disconnect();
       return;
     }
+    collect();
     reportConfirmation();
   }, 1000);
 }
