@@ -2,6 +2,24 @@ const sessions = new Map();
 const tabArmed = new Map();
 const syncTimers = new Map();
 
+function isMailbox(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (/(^|\.)mail\.google\.com$/.test(host) || host === 'gmail.com' || host === 'inbox.google.com') return true;
+    if (/(^|\.)outlook\.(live|office|office365)\.com$/.test(host) || host === 'outlook.cloud.microsoft') return true;
+    if (/(^|\.)mail\.yahoo\./.test(host)) return true;
+    if (host === 'mail.proton.me' || host === 'mail.protonmail.com' || host === 'app.proton.me') return true;
+    if (/(^|\.)mail\.aol\.com$/.test(host) || /(^|\.)mail\.zoho\.com$/.test(host)) return true;
+    if (/(^|\.)fastmail\.com$/.test(host) || host === 'app.hey.com' || /(^|\.)superhuman\.com$/.test(host)) return true;
+    if (host === 'www.icloud.com' && /^\/mail(\/|$)/.test(parsed.pathname)) return true;
+    if (/^webmail\./.test(host)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function isEmbedUrl(url) {
   try {
     const parsed = new URL(url);
@@ -33,7 +51,7 @@ function cleanUrl(url) {
 
 function fullJobUrl(url) {
   const cleaned = cleanUrl(url);
-  if (!cleaned || isEmbedUrl(cleaned)) return '';
+  if (!cleaned || isEmbedUrl(cleaned) || isMailbox(cleaned)) return '';
   try {
     const parsed = new URL(cleaned);
     if (/(^|\.)greenhouse\.io$/i.test(parsed.hostname) && /\/embed\/job_app/i.test(parsed.pathname)) {

@@ -15,6 +15,24 @@ function isEmbedLocation() {
   return false;
 }
 
+function isMailbox(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (/(^|\.)mail\.google\.com$/.test(host) || host === 'gmail.com' || host === 'inbox.google.com') return true;
+    if (/(^|\.)outlook\.(live|office|office365)\.com$/.test(host) || host === 'outlook.cloud.microsoft') return true;
+    if (/(^|\.)mail\.yahoo\./.test(host)) return true;
+    if (host === 'mail.proton.me' || host === 'mail.protonmail.com' || host === 'app.proton.me') return true;
+    if (/(^|\.)mail\.aol\.com$/.test(host) || /(^|\.)mail\.zoho\.com$/.test(host)) return true;
+    if (/(^|\.)fastmail\.com$/.test(host) || host === 'app.hey.com' || /(^|\.)superhuman\.com$/.test(host)) return true;
+    if (host === 'www.icloud.com' && /^\/mail(\/|$)/.test(parsed.pathname)) return true;
+    if (/^webmail\./.test(host)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function domainOf(url) {
   try {
     return new URL(url).hostname;
@@ -183,7 +201,7 @@ function reportConfirmation() {
   });
 }
 
-if (!isEmbedLocation()) {
+if (!isEmbedLocation() && !isMailbox(location.href)) {
   document.addEventListener('input', () => collect(), true);
   document.addEventListener('change', () => collect(), true);
   document.addEventListener('click', (event) => {
