@@ -94,15 +94,35 @@ function arm() {
   });
 }
 
-function pageText() {
-  const chunks = [];
-  let size = 0;
-  const limit = 30000;
+function snippetAround(source, match) {
+  const start = Math.max(0, match.index - 40);
+  return source.slice(start, match.index + match[0].length + 80).trim();
+}
+
+function matchConfirmation(source) {
+  const flat = String(source || '').replace(/\s+/g, ' ');
+  const match = flat.match(CONFIRMATION);
+  if (!match || match.index == null) return '';
+  return snippetAround(flat, match);
+}
+
+function confirmationSnippet() {
+  const visible = matchConfirmation(`${document.title}\n${location.href}\n${document.body?.innerText || ''}`);
+  if (visible) return visible;
+
+  let tail = '';
+  let found = '';
+  function take(text) {
+    if (found || !text) return;
+    tail = `${tail} ${text}`.replace(/\s+/g, ' ');
+    if (tail.length > 2000) tail = tail.slice(-2000);
+    const match = tail.match(CONFIRMATION);
+    if (match && match.index != null) found = snippetAround(tail, match);
+  }
   function walk(node) {
-    if (!node || size >= limit) return;
+    if (!node || found) return;
     if (node.nodeType === Node.TEXT_NODE) {
-      chunks.push(node.textContent || '');
-      size += (node.textContent || '').length;
+      take(node.textContent || '');
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
@@ -114,15 +134,7 @@ function pageText() {
     for (const child of node.childNodes) walk(child);
   }
   walk(document.body || document.documentElement);
-  return chunks.join(' ');
-}
-
-function confirmationSnippet() {
-  const source = `${document.title}\n${location.href}\n${pageText()}`.replace(/\s+/g, ' ');
-  const match = source.match(CONFIRMATION);
-  if (!match || match.index == null) return '';
-  const start = Math.max(0, match.index - 40);
-  return source.slice(start, match.index + match[0].length + 80).trim();
+  return found;
 }
 
 let reportedConfirmation = false;

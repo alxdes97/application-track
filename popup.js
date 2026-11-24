@@ -1,3 +1,5 @@
+document.querySelector('#version').textContent = `v${chrome.runtime.getManifest().version}`;
+
 const connection = document.querySelector('#connection');
 const connectionLabel = document.querySelector('#connection-label');
 const signalDetail = document.querySelector('#signal-detail');
@@ -137,9 +139,27 @@ document.querySelector('#sign-out').addEventListener('click', async () => {
   await refresh();
 });
 
-chrome.storage.local.get('apiOrigin').then((data) => {
-  if (data.apiOrigin) document.querySelector('#api-url').value = data.apiOrigin;
+function showExtensionUpdate(update) {
+  const node = document.querySelector('#update');
+  if (!update?.version) {
+    node.hidden = true;
+    node.textContent = '';
+    return;
+  }
+  node.hidden = false;
+  node.textContent = `Update this extension to v${update.version}. This copy is v${chrome.runtime.getManifest().version}.`;
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.extensionUpdate) showExtensionUpdate(changes.extensionUpdate.newValue);
 });
+
+chrome.storage.local.get(['apiOrigin', 'extensionUpdate']).then((data) => {
+  if (data.apiOrigin) document.querySelector('#api-url').value = data.apiOrigin;
+  showExtensionUpdate(data.extensionUpdate);
+});
+
+chrome.runtime.sendMessage({ type: 'check-version' });
 
 refresh();
 setInterval(refresh, 4000);
