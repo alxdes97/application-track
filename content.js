@@ -1,6 +1,6 @@
 const FINAL = /\b(submit|sent|send application|complete application|finish application)\b/i;
 const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
-const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|thank you for reaching out|thanks for reaching out|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps|we will be in touch|we(?:'|’)ll be in touch/i;
+const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|thank you for reaching out|thanks for reaching out|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|\bapplication submitted\b|\bsubmitted successfully\b|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps|we will be in touch|we(?:'|’)ll be in touch/i;
 
 let armedUntil = 0;
 let preArmConfirmation = '';
@@ -134,6 +134,23 @@ function isFinalSubmit(element) {
   return FINAL.test(text);
 }
 
+function isButtonLike(element) {
+  if (!(element instanceof Element)) return false;
+  const tag = element.tagName;
+  const type = (element.getAttribute('type') || '').toLowerCase();
+  const role = (element.getAttribute('role') || '').toLowerCase();
+  return tag === 'BUTTON' || type === 'submit' || role === 'button' || /-button$/i.test(tag);
+}
+
+function submitControl(event) {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  for (const node of path) {
+    if (isButtonLike(node)) return node;
+  }
+  const target = event.target instanceof Element ? event.target : null;
+  return target ? target.closest('button, input[type="submit"], [role="button"]') : null;
+}
+
 function arm() {
   if (!baselineFrozen) {
     preArmConfirmation = visibleConfirmation();
@@ -244,7 +261,7 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
   document.addEventListener('change', () => collect(), true);
   document.addEventListener('click', (event) => {
     collect();
-    const target = event.target instanceof Element ? event.target.closest('button, input[type="submit"], [role="button"]') : null;
+    const target = submitControl(event);
     if (target && isFinalSubmit(target)) arm();
     setTimeout(reportConfirmation, 400);
     setTimeout(reportConfirmation, 1500);
@@ -281,10 +298,10 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
     if (!chrome.runtime.lastError && response?.armed && response.until > Date.now()) {
       armedUntil = response.until;
     }
-    const pendingNavigation = Date.now() < armedUntil && urlLooksConfirmed();
-    if (!baselineFrozen && !pendingNavigation) preArmConfirmation = visibleConfirmation();
+    const arrivedSubmitted = Date.now() < armedUntil && (urlLooksConfirmed() || !!visibleConfirmation());
+    if (!baselineFrozen && !arrivedSubmitted) preArmConfirmation = visibleConfirmation();
     baselineReady = true;
-    if (pendingNavigation) reportConfirmation();
+    if (arrivedSubmitted) reportConfirmation();
   });
 
   let confirmationQueued = false;
