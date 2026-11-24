@@ -10,6 +10,8 @@ const who = document.querySelector('#who');
 const watching = document.querySelector('#watching');
 const last = document.querySelector('#last');
 
+const DEFAULT_SERVER = 'http://213.59.112.27:5000';
+
 function originOf(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -18,6 +20,17 @@ function originOf(value) {
   } catch {
     return '';
   }
+}
+
+function extensionDownloadUrl(server) {
+  return `${originOf(server) || DEFAULT_SERVER}/api/extensions/application-track/download`;
+}
+
+function showDownloadLink(server) {
+  const href = extensionDownloadUrl(server);
+  const link = document.querySelector('#download');
+  link.href = href;
+  link.textContent = href;
 }
 
 function showSignal(state, label, detail) {
@@ -154,8 +167,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.extensionUpdate) showExtensionUpdate(changes.extensionUpdate.newValue);
 });
 
+const serverInput = document.querySelector('#api-url');
+serverInput.addEventListener('input', () => showDownloadLink(serverInput.value));
+
 chrome.storage.local.get(['apiOrigin', 'extensionUpdate']).then((data) => {
-  if (data.apiOrigin) document.querySelector('#api-url').value = data.apiOrigin;
+  if (data.apiOrigin) serverInput.value = data.apiOrigin;
+  showDownloadLink(serverInput.value);
   showExtensionUpdate(data.extensionUpdate);
 });
 

@@ -1,6 +1,6 @@
 const FINAL = /\b(submit|sent|send application|complete application|finish application)\b/i;
 const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
-const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|thank you for reaching out|thanks for reaching out|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|\bapplication submitted\b|\bsubmitted successfully\b|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps|we will be in touch|we(?:'|’)ll be in touch/i;
+const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|thank you for reaching out|thanks for reaching out|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|\bapplication submitted\b|\bsubmitted successfully\b|successfully submitted your application|successfully applied|we (?:have )?received your application|your application (?:has been|was) received|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps|we will be in touch|we(?:'|’)ll be in touch/i;
 
 let armedUntil = 0;
 let preArmConfirmation = '';
@@ -150,13 +150,45 @@ function isButtonLike(element) {
   return tag === 'BUTTON' || type === 'submit' || role === 'button' || /-button$/i.test(tag);
 }
 
-function submitControl(event) {
+function buttonPath(event) {
   const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  const buttons = [];
   for (const node of path) {
-    if (isButtonLike(node)) return node;
+    if (isButtonLike(node)) buttons.push(node);
   }
-  const target = event.target instanceof Element ? event.target : null;
-  return target ? target.closest('button, input[type="submit"], [role="button"]') : null;
+  if (buttons.length === 0) {
+    const target = event.target instanceof Element ? event.target : null;
+    const closest = target ? target.closest('button, input[type="submit"], [role="button"]') : null;
+    if (closest) buttons.push(closest);
+  }
+  return buttons;
+}
+
+function eventIsFinalSubmit(event) {
+  const buttons = buttonPath(event);
+  const innermost = buttons[0] ? controlText(buttons[0]) : '';
+  if (innermost && NOT_FINAL.test(innermost) && !FINAL.test(innermost)) return false;
+  if (buttons.some((node) => isFinalSubmit(node))) return true;
+  if (buttons.length > 0) return false;
+  let node = event.target instanceof Element ? event.target : null;
+  for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+    const text = controlText(node);
+    if (text && text.length <= 80 && FINAL.test(text) && !NOT_FINAL.test(text)) return true;
+  }
+  return false;
+}
+
+const ARM_MS = 20000;
+
+function publishArm(until) {
+  armedUntil = Math.max(armedUntil, until);
+  chrome.runtime.sendMessage({
+    type: 'arm',
+    domain: domainOf(location.href),
+    url: location.href,
+    title: document.title,
+    until: armedUntil,
+  });
 }
 
 function arm() {
@@ -164,13 +196,40 @@ function arm() {
     preArmConfirmation = visibleConfirmation();
     baselineFrozen = true;
   }
-  armedUntil = Date.now() + 20000;
-  chrome.runtime.sendMessage({
-    type: 'arm',
-    domain: domainOf(location.href),
-    url: location.href,
-    title: document.title,
-  });
+  publishArm(Date.now() + ARM_MS);
+}
+
+function isHiddenBox(element) {
+  if (!(element instanceof Element)) return false;
+  if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+  const style = getComputedStyle(element);
+  return style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number.parseFloat(style.opacity) === 0;
+}
+
+function captchaChallengeOpen() {
+  const frames = document.querySelectorAll(
+    'iframe[src*="recaptcha/api2/bframe"], iframe[src*="recaptcha/enterprise/bframe"], iframe[title*="recaptcha challenge" i], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"]'
+  );
+  for (const frame of frames) {
+    let node = frame;
+    let hidden = false;
+    while (node && node !== document.documentElement) {
+      if (isHiddenBox(node)) {
+        hidden = true;
+        break;
+      }
+      node = node.parentElement;
+    }
+    if (!hidden) return true;
+  }
+  return false;
+}
+
+function holdArmForCaptcha() {
+  if (!baselineFrozen || reportedConfirmation || !captchaChallengeOpen()) return;
+  const until = Date.now() + ARM_MS;
+  if (armedUntil >= until - 5000) return;
+  publishArm(until);
 }
 
 function snippetAround(source, match) {
@@ -249,7 +308,7 @@ function reportConfirmation() {
   if (!confirmation || confirmation === preArmConfirmation) return;
   reporting = true;
   collect();
-  chrome.runtime.sendMessage({
+  const payload = {
     type: 'success',
     domain: domainOf(location.href),
     url: location.href,
@@ -257,10 +316,19 @@ function reportConfirmation() {
     confirmation,
     reason: 'confirmation',
     fields: [...captured.values()],
-  }, (response) => {
-    reporting = false;
-    if (chrome.runtime.lastError || !response?.ok) return;
-    reportedConfirmation = true;
+  };
+  chrome.runtime.sendMessage({
+    type: 'arm',
+    domain: payload.domain,
+    url: payload.url,
+    title: payload.title,
+    until: armedUntil,
+  }, () => {
+    chrome.runtime.sendMessage(payload, (response) => {
+      reporting = false;
+      if (chrome.runtime.lastError || !response?.ok) return;
+      reportedConfirmation = true;
+    });
   });
 }
 
@@ -269,8 +337,7 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
   document.addEventListener('change', () => collect(), true);
   document.addEventListener('click', (event) => {
     collect();
-    const target = submitControl(event);
-    if (target && isFinalSubmit(target)) arm();
+    if (eventIsFinalSubmit(event)) arm();
     setTimeout(reportConfirmation, 400);
     setTimeout(reportConfirmation, 1500);
   }, true);
@@ -295,6 +362,7 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
   function watchConfirmation() {
     collect();
     if (!baselineReady) return;
+    holdArmForCaptcha();
     if (Date.now() < armedUntil) {
       reportConfirmation();
       return;

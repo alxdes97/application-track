@@ -293,7 +293,11 @@ async function send(tabId, session, submitted) {
 
 const EXTENSION_KEY = 'application-track';
 const DEFAULT_ORIGIN = 'http://213.59.112.27:5000';
-const DOWNLOAD_URL = 'https://github.com/alxdes97/application-track/archive/refs/heads/main.zip';
+
+function extensionDownloadUrl(origin) {
+  const base = String(origin || DEFAULT_ORIGIN).replace(/\/+$/, '');
+  return `${base}/api/extensions/application-track/download`;
+}
 
 async function checkExtensionVersion() {
   const installed = chrome.runtime.getManifest().version;
@@ -321,7 +325,7 @@ async function checkExtensionVersion() {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title: 'Update Application Track',
-      message: `This copy is v${installed}. Install v${payload.version}. ${DOWNLOAD_URL}`,
+      message: `This copy is v${installed}. Install v${payload.version}. ${extensionDownloadUrl(origin)}`,
       priority: 2,
     }).catch(() => {});
   } catch {
@@ -350,7 +354,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       const session = ensureSession(tabId, url, isEmbedUrl(message.url || '') ? '' : message.title);
-      tabArmed.set(tabId, { key: session.key, until: Date.now() + 20000 });
+      const requested = Number(message.until);
+      const cap = Date.now() + 180000;
+      const until = Number.isFinite(requested) && requested > Date.now()
+        ? Math.min(requested, cap)
+        : Date.now() + 20000;
+      const existing = tabArmed.get(tabId);
+      const keep = existing && existing.key === session.key ? existing.until : 0;
+      tabArmed.set(tabId, { key: session.key, until: Math.max(until, keep) });
       sendResponse({ ok: true });
     });
     return true;
