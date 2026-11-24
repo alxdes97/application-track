@@ -177,13 +177,8 @@ function latestOpenSession(tabId) {
   return latestWithFields || latest;
 }
 
-async function rememberFields(tabId, message, sender) {
-  const url = await jobPageUrl(sender, message);
-  if (!pageKey(url)) return 0;
-  const frameUrl = String(message.url || '');
-  const title = frameUrl && isEmbedUrl(frameUrl) ? '' : message.title;
-  const session = ensureSession(tabId, url, title);
-  for (const field of message.fields || []) {
+function storeFields(session, fields) {
+  for (const field of fields || []) {
     if (!field?.key) continue;
     session.fields[field.key] = {
       label: String(field.label || field.name || 'Field'),
@@ -191,6 +186,20 @@ async function rememberFields(tabId, message, sender) {
       value: String(field.value ?? ''),
     };
   }
+}
+
+async function rememberFields(tabId, message, sender) {
+  const url = await jobPageUrl(sender, message);
+  if (!pageKey(url)) return 0;
+  const existing = sessions.get(sessionKey(tabId, url));
+  if (existing?.closed && Date.now() - existing.touched < 1500) {
+    storeFields(existing, message.fields);
+    return Object.keys(existing.fields).length;
+  }
+  const frameUrl = String(message.url || '');
+  const title = frameUrl && isEmbedUrl(frameUrl) ? '' : message.title;
+  const session = ensureSession(tabId, url, title);
+  storeFields(session, message.fields);
   scheduleSync(tabId, session);
   return Object.keys(session.fields).length;
 }
@@ -345,7 +354,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+  if (message?.type === 'armed-status' && tabId != null) {
+    const armed = tabArmed.get(tabId);
+    const active = !!armed && armed.until > Date.now();
+    if (armed && !active) tabArmed.delete(tabId);
+    sendResponse({ armed: active, until: active ? armed.until : 0 });
+    return false;
+  }
   if (message?.type === 'success' && tabId != null) {
+    const armed = tabArmed.get(tabId);
+    if (!armed || armed.until < Date.now()) {
+      if (armed) tabArmed.delete(tabId);
+      sendResponse({ ok: false, reason: 'not-armed' });
+      return false;
+    }
     jobPageUrl(sender, message).then((url) => {
       if (!url) {
         sendResponse({ ok: false, reason: 'embed' });
@@ -364,6 +386,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } else {
         session.url = url;
       }
+      storeFields(session, message.fields);
       if (message.confirmation) {
         session.fields.confirmation = {
           label: 'Confirmation',
@@ -371,6 +394,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           value: String(message.confirmation).slice(0, 500),
         };
       }
+      session.touched = Date.now();
       const pending = syncTimers.get(session.key);
       if (pending) clearTimeout(pending);
       send(tabId, session, true).then(sendResponse);

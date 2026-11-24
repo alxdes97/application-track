@@ -3,6 +3,9 @@ const NOT_FINAL = /\b(next|continue|back|previous|cancel|save draft)\b/i;
 const CONFIRMATION = /thank you for applying|thanks for applying|thank you for your application|thanks for your application|your application (?:has been |was )?(?:successfully )?submitted|application (?:has been |was )?successfully submitted|successfully submitted your application|successfully applied|we (?:have )?received your application|application received|your application (?:was|has been) sent|you(?:'|’)ve applied|you have applied|application complete|we(?:'|’)ll contact you if there are next steps/i;
 
 let armedUntil = 0;
+let preArmConfirmation = '';
+let baselineFrozen = false;
+let baselineReady = false;
 
 function isEmbedLocation() {
   const host = location.hostname;
@@ -68,12 +71,18 @@ function customSelectValue(element) {
   return [...chosen].map((node) => cleanText(node.innerText)).filter(Boolean).join(', ');
 }
 
+function selectValue(element) {
+  const marked = [...element.options].filter((option) => option.getAttribute('aria-selected') === 'true' && String(option.value || '').trim());
+  const selected = marked.length
+    ? marked
+    : [...element.selectedOptions].filter((option) => String(option.value || '').trim());
+  return selected.map((option) => cleanText(option.text) || option.value).filter(Boolean).join(', ');
+}
+
 function fieldValue(element) {
   const chosen = customSelectValue(element);
   if (chosen) return chosen;
-  if (element instanceof HTMLSelectElement) {
-    return [...element.selectedOptions].map((option) => option.text.trim() || option.value).filter(Boolean).join(', ');
-  }
+  if (element instanceof HTMLSelectElement) return selectValue(element);
   if (element instanceof HTMLInputElement && element.type === 'file') {
     return [...(element.files || [])].map((file) => file.name).filter(Boolean).join(', ');
   }
@@ -126,6 +135,10 @@ function isFinalSubmit(element) {
 }
 
 function arm() {
+  if (!baselineFrozen) {
+    preArmConfirmation = visibleConfirmation();
+    baselineFrozen = true;
+  }
   armedUntil = Date.now() + 20000;
   chrome.runtime.sendMessage({
     type: 'arm',
@@ -147,10 +160,33 @@ function matchConfirmation(source) {
   return snippetAround(flat, match);
 }
 
-function confirmationSnippet() {
-  const visible = matchConfirmation(`${document.title}\n${location.href}\n${document.body?.innerText || ''}`);
-  if (visible) return visible;
+function isConcealed(element) {
+  if (!(element instanceof Element)) return false;
+  if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+  const style = getComputedStyle(element);
+  if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden') return true;
+  if (Number.parseFloat(style.opacity) === 0) return true;
+  if (typeof element.checkVisibility === 'function') {
+    try {
+      if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return true;
+    } catch {
+      // The visibility check above still applies.
+    }
+  }
+  return false;
+}
 
+function urlLooksConfirmed() {
+  let path = `${location.pathname}${location.hash}`;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Keep the raw path when it is not valid encoding.
+  }
+  return CONFIRMATION.test(`${document.title}\n${path}`.replace(/[-_]+/g, ' '));
+}
+
+function visibleConfirmation() {
   let tail = '';
   let found = '';
   function take(text) {
@@ -169,7 +205,8 @@ function confirmationSnippet() {
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
     if (node.nodeType === Node.ELEMENT_NODE) {
       const tag = node.tagName;
-      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') return;
+      if (isConcealed(node)) return;
     }
     if (node.shadowRoot) walk(node.shadowRoot);
     for (const child of node.childNodes) walk(child);
@@ -182,9 +219,9 @@ let reportedConfirmation = false;
 let reporting = false;
 
 function reportConfirmation() {
-  if (reportedConfirmation || reporting) return;
-  const confirmation = confirmationSnippet();
-  if (!confirmation) return;
+  if (reportedConfirmation || reporting || !baselineReady || Date.now() >= armedUntil) return;
+  const confirmation = visibleConfirmation();
+  if (!confirmation || confirmation === preArmConfirmation) return;
   reporting = true;
   collect();
   chrome.runtime.sendMessage({
@@ -194,6 +231,7 @@ function reportConfirmation() {
     title: document.title,
     confirmation,
     reason: 'confirmation',
+    fields: [...captured.values()],
   }, (response) => {
     reporting = false;
     if (chrome.runtime.lastError || !response?.ok) return;
@@ -213,8 +251,14 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
   }, true);
   document.addEventListener('submit', (event) => {
     const submitter = event.submitter;
-    if (!submitter || !isFinalSubmit(submitter)) return;
-    arm();
+    if (submitter) {
+      if (isFinalSubmit(submitter)) arm();
+      return;
+    }
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const control = [...form.querySelectorAll('button, input[type="submit"]')].find((element) => isFinalSubmit(element));
+    if (control) arm();
   }, true);
 
   const hook = document.createElement('script');
@@ -223,16 +267,33 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
   (document.documentElement || document.head).appendChild(hook);
   hook.onload = () => hook.remove();
 
-  collect();
-  reportConfirmation();
+  function watchConfirmation() {
+    collect();
+    if (!baselineReady) return;
+    if (Date.now() < armedUntil) {
+      reportConfirmation();
+      return;
+    }
+    if (!baselineFrozen) preArmConfirmation = visibleConfirmation();
+  }
+
+  chrome.runtime.sendMessage({ type: 'armed-status' }, (response) => {
+    if (!chrome.runtime.lastError && response?.armed && response.until > Date.now()) {
+      armedUntil = response.until;
+    }
+    const pendingNavigation = Date.now() < armedUntil && urlLooksConfirmed();
+    if (!baselineFrozen && !pendingNavigation) preArmConfirmation = visibleConfirmation();
+    baselineReady = true;
+    if (pendingNavigation) reportConfirmation();
+  });
+
   let confirmationQueued = false;
   const confirmationObserver = new MutationObserver(() => {
     if (reportedConfirmation || confirmationQueued) return;
     confirmationQueued = true;
     setTimeout(() => {
       confirmationQueued = false;
-      collect();
-      reportConfirmation();
+      watchConfirmation();
     }, 250);
   });
   confirmationObserver.observe(document.documentElement, {
@@ -247,7 +308,6 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
       confirmationObserver.disconnect();
       return;
     }
-    collect();
-    reportConfirmation();
+    watchConfirmation();
   }, 1000);
 }
