@@ -58,9 +58,9 @@ function collect() {
     if (['password', 'hidden', 'file', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
     const name = element.getAttribute('name') || element.id || '';
     if (/csrf|authenticity|token/i.test(name)) continue;
-    const value = fieldValue(element).trim();
-    if (!value) continue;
     const label = labelFor(element).slice(0, 180);
+    const value = fieldValue(element).trim();
+    if (!value && !label && !name) continue;
     const key = `${name || label}:${type}`;
     captured.set(key, { key, label: label || name || 'Field', name, value: value.slice(0, 20000) });
   }

@@ -166,11 +166,11 @@ async function rememberFields(tabId, message, sender) {
   const title = frameUrl && isEmbedUrl(frameUrl) ? '' : message.title;
   const session = ensureSession(tabId, url, title);
   for (const field of message.fields || []) {
-    if (!field?.key || !field.value) continue;
+    if (!field?.key) continue;
     session.fields[field.key] = {
       label: String(field.label || field.name || 'Field'),
       name: String(field.name || ''),
-      value: String(field.value),
+      value: String(field.value ?? ''),
     };
   }
   scheduleSync(tabId, session);
