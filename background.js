@@ -308,7 +308,34 @@ function extensionDownloadUrl(origin) {
   return `${base}/api/extensions/application-track/download`;
 }
 
-async function checkExtensionVersion() {
+let versionCheck = Promise.resolve();
+
+function checkExtensionVersion() {
+  const run = reportExtensionVersion();
+  versionCheck = Promise.all([versionCheck, run]).then(() => {});
+  return run;
+}
+
+async function markSignedOut(origin, token) {
+  if (!token) return;
+  let pending = versionCheck;
+  await pending;
+  while (versionCheck !== pending) {
+    pending = versionCheck;
+    await pending;
+  }
+  const base = String(origin || DEFAULT_ORIGIN).replace(/\/+$/, '');
+  try {
+    await fetch(`${base}/api/extensions/${EXTENSION_KEY}/offline`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // The site keeps the last check-in until this sign-out reaches the server.
+  }
+}
+
+async function reportExtensionVersion() {
   const installed = chrome.runtime.getManifest().version;
   const stored = await chrome.storage.local.get(['apiOrigin', 'token', 'notifiedExtensionVersion']);
   const origin = String(stored.apiOrigin || DEFAULT_ORIGIN).replace(/\/+$/, '');
@@ -424,6 +451,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'check-version') {
     checkExtensionVersion().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message?.type === 'sign-out') {
+    markSignedOut(message.origin, message.token).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (message?.type === 'status') {

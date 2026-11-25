@@ -158,6 +158,7 @@ document.querySelector('#sign-in').addEventListener('click', async () => {
     });
     document.querySelector('#password').value = '';
     setupStatus.textContent = '';
+    chrome.runtime.sendMessage({ type: 'check-version' });
     await refresh();
   } catch {
     setupStatus.textContent = 'The server did not answer.';
@@ -166,8 +167,16 @@ document.querySelector('#sign-in').addEventListener('click', async () => {
 });
 
 document.querySelector('#sign-out').addEventListener('click', async () => {
+  const data = await chrome.storage.local.get(['apiOrigin', 'token']);
   await chrome.storage.local.remove(['token', 'email']);
   await chrome.storage.local.set({ connected: false });
+  if (data.token) {
+    await chrome.runtime.sendMessage({
+      type: 'sign-out',
+      origin: data.apiOrigin,
+      token: data.token,
+    });
+  }
   await refresh();
 });
 
