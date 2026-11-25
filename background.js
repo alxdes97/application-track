@@ -111,6 +111,15 @@ async function jobPageUrl(sender, message) {
 function pageKey(url) {
   try {
     const parsed = new URL(url);
+    if (/(^|\.)applytojob\.com$/i.test(parsed.hostname)) {
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      const applyAt = parts.findIndex((part) => part.toLowerCase() === 'apply');
+      if (applyAt >= 0) {
+        const rest = parts.slice(applyAt + 1);
+        const id = rest[0]?.toLowerCase() === 'confirm' ? rest[1] : rest[0];
+        if (id && /^[A-Za-z0-9_-]+$/.test(id)) return `${parsed.origin}/apply/${id}`;
+      }
+    }
     const path = parsed.pathname.replace(/\/$/, '');
     return `${parsed.origin}${path}`;
   } catch {
@@ -335,7 +344,7 @@ async function checkExtensionVersion() {
 
 chrome.runtime.onInstalled.addListener(() => checkExtensionVersion());
 chrome.runtime.onStartup.addListener(() => checkExtensionVersion());
-chrome.alarms.create('extension-version', { periodInMinutes: 30 });
+chrome.alarms.create('extension-version', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'extension-version') checkExtensionVersion();
 });

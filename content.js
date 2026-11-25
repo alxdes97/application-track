@@ -96,9 +96,96 @@ function fieldValue(element) {
 
 const captured = new Map();
 
+function applicationForm() {
+  const forms = [...document.querySelectorAll('form')];
+  let best = null;
+  let bestCount = 0;
+  for (const form of forms) {
+    const count = form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select').length;
+    if (count > bestCount) {
+      best = form;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function pageStepLabel() {
+  const form = applicationForm();
+  if (!form) return '';
+  const names = [...form.querySelectorAll('input, textarea, select')]
+    .map((element) => element.getAttribute('name') || element.id || '')
+    .filter(Boolean)
+    .slice(0, 40)
+    .join(',');
+  const id = `${location.origin}${location.pathname}?${names}`;
+  let steps = [];
+  try {
+    steps = JSON.parse(sessionStorage.getItem('application-track-steps') || '[]');
+  } catch {
+    steps = [];
+  }
+  if (!Array.isArray(steps)) steps = [];
+  let index = steps.indexOf(id);
+  if (index === -1) {
+    steps.push(id);
+    steps = steps.slice(-30);
+    index = steps.indexOf(id);
+    try {
+      sessionStorage.setItem('application-track-steps', JSON.stringify(steps));
+    } catch {
+      // The page can still be saved when storage is blocked.
+    }
+  }
+  return `Page ${index + 1}`;
+}
+
+function pageHtml() {
+  const form = applicationForm();
+  if (!form) return '';
+  const copy = form.cloneNode(true);
+  copy.querySelectorAll('script, style, noscript, iframe').forEach((node) => node.remove());
+  const liveControls = [...form.querySelectorAll('input, textarea, select')];
+  const copiedControls = [...copy.querySelectorAll('input, textarea, select')];
+  liveControls.forEach((element, index) => {
+    const target = copiedControls[index];
+    if (!target) return;
+    if (element instanceof HTMLInputElement && element.type === 'password') {
+      target.removeAttribute('value');
+      return;
+    }
+    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
+      if (element.checked) target.setAttribute('checked', '');
+      else target.removeAttribute('checked');
+      return;
+    }
+    if (element instanceof HTMLSelectElement) {
+      [...target.options].forEach((option, optionIndex) => {
+        if (element.options[optionIndex]?.selected) option.setAttribute('selected', '');
+        else option.removeAttribute('selected');
+      });
+      return;
+    }
+    const value = element.value || '';
+    target.setAttribute('value', value);
+    if (target.tagName === 'TEXTAREA') target.textContent = value;
+  });
+  return copy.innerHTML.replace(/\s+/g, ' ').trim().slice(0, 20000);
+}
+
 function collect() {
   const domain = domainOf(location.href);
   if (!domain) return;
+  const stepLabel = pageStepLabel();
+  const html = pageHtml();
+  if (stepLabel && html) {
+    captured.set(`page-html:${stepLabel}`, {
+      key: `page-html:${stepLabel}`,
+      label: stepLabel,
+      name: 'page-html',
+      value: html,
+    });
+  }
   const controls = document.querySelectorAll('input, textarea, select');
   for (const element of controls) {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) continue;
@@ -335,6 +422,7 @@ function reportConfirmation() {
 if (!isEmbedLocation() && !isMailbox(location.href)) {
   document.addEventListener('input', () => collect(), true);
   document.addEventListener('change', () => collect(), true);
+  window.addEventListener('pagehide', () => collect());
   document.addEventListener('click', (event) => {
     collect();
     if (eventIsFinalSubmit(event)) arm();
