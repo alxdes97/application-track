@@ -94,6 +94,13 @@ button.text {
   color: #475569;
 }
 
+.latest {
+  display: block;
+  margin-top: 2px;
+  color: #0f766e;
+  font-weight: 700;
+}
+
 .download a {
   display: block;
   margin-top: 2px;

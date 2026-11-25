@@ -31,6 +31,25 @@ function showDownloadLink(server) {
   const link = document.querySelector('#download');
   link.href = href;
   link.textContent = href;
+  showLatestVersion(server);
+}
+
+async function showLatestVersion(server) {
+  const node = document.querySelector('#latest');
+  const origin = originOf(server) || DEFAULT_SERVER;
+  try {
+    const response = await fetch(`${origin}/api/extensions`);
+    if (!response.ok) {
+      node.textContent = 'Latest version unavailable';
+      return;
+    }
+    const payload = await response.json();
+    const release = (payload.extensions || []).find((item) => item.key === 'application-track');
+    const latest = release?.packageVersion || release?.version;
+    node.textContent = latest ? `Latest version v${latest}` : 'Latest version unavailable';
+  } catch {
+    node.textContent = 'Latest version unavailable';
+  }
 }
 
 function showSignal(state, label, detail) {
