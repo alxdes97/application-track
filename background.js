@@ -158,6 +158,10 @@ function pageKey(url) {
         if (id && /^[A-Za-z0-9_-]+$/.test(id)) return `${parsed.origin}/apply/${id}`;
       }
     }
+    if (/(^|\.)greenhouse\.io$/i.test(parsed.hostname)) {
+      const match = parsed.pathname.match(/^(.*)\/jobs\/(\d+)(?:\/(?:confirmation|apply|thankyou|thanks))?\/?$/i);
+      if (match) return `${parsed.origin}${match[1]}/jobs/${match[2]}`;
+    }
     const path = parsed.pathname.replace(/\/$/, '');
     return `${parsed.origin}${path}`;
   } catch {
@@ -187,6 +191,7 @@ chrome.tabs?.onRemoved?.addListener(forgetTab);
 function usableTitle(title) {
   const value = String(title || '').trim();
   if (!value || /recaptcha|hcaptcha|turnstile/i.test(value)) return '';
+  if (/thank you for applying|thanks for applying|successfully applied/i.test(value)) return '';
   return value;
 }
 
@@ -213,6 +218,15 @@ function ensureSession(tabId, url, title) {
   }
   persistSession(session);
   return session;
+}
+
+function carryAnswers(from, into) {
+  if (!from || !into || from === into) return;
+  const saved = from.fields || {};
+  if (Object.keys(saved).length === 0) return;
+  into.fields = { ...saved, ...(into.fields || {}) };
+  if (!usableTitle(into.title)) into.title = usableTitle(from.title);
+  persistSession(into);
 }
 
 function latestOpenSession(tabId) {
@@ -444,6 +458,9 @@ function handleMessage(message, sender, sendResponse) {
         return;
       }
       const session = ensureSession(tabId, url, isEmbedUrl(message.url || '') ? '' : message.title);
+      const previous = tabArmed.get(tabId);
+      carryAnswers(previous ? sessions.get(previous.key) : null, session);
+      carryAnswers(latestOpenSession(tabId), session);
       const requested = Number(message.until);
       const cap = Date.now() + 180000;
       const until = Number.isFinite(requested) && requested > Date.now()
@@ -486,6 +503,7 @@ function handleMessage(message, sender, sendResponse) {
       const armed = tabArmed.get(tabId);
       let session = armed ? sessions.get(armed.key) : null;
       if (!session || session.closed) session = latestOpenSession(tabId);
+      carryAnswers(latestOpenSession(tabId), session);
       if (!session || (pageKey(url) && pageKey(url) !== session.pageKey && urlRank(url) > urlRank(session.url))) {
         const next = ensureSession(tabId, url, session?.title || message.title);
         if (session) {
