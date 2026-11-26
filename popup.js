@@ -26,11 +26,19 @@ function extensionDownloadUrl(server) {
   return `${originOf(server) || DEFAULT_SERVER}/api/extensions/application-track/download`;
 }
 
+function extensionMobileUrl(server) {
+  return `${originOf(server) || DEFAULT_SERVER}/api/extensions/application-track/mobile.user.js`;
+}
+
 function showDownloadLink(server) {
   const href = extensionDownloadUrl(server);
   const link = document.querySelector('#download');
   link.href = href;
   link.textContent = href;
+  const mobile = document.querySelector('#mobile');
+  const mobileHref = extensionMobileUrl(server);
+  mobile.href = mobileHref;
+  mobile.textContent = mobileHref;
   showLatestVersion(server);
 }
 

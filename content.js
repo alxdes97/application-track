@@ -441,11 +441,14 @@ if (!isEmbedLocation() && !isMailbox(location.href)) {
     if (control) arm();
   }, true);
 
-  const hook = document.createElement('script');
-  hook.src = chrome.runtime.getURL('page-hook.js');
-  hook.async = false;
-  (document.documentElement || document.head).appendChild(hook);
-  hook.onload = () => hook.remove();
+  const hookUrl = typeof chrome.runtime.getURL === 'function' ? chrome.runtime.getURL('page-hook.js') : '';
+  if (hookUrl) {
+    const hook = document.createElement('script');
+    hook.src = hookUrl;
+    hook.async = false;
+    (document.documentElement || document.head).appendChild(hook);
+    hook.onload = () => hook.remove();
+  }
 
   function watchConfirmation() {
     collect();

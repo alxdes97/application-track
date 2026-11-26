@@ -1,6 +1,8 @@
 body {
+  box-sizing: border-box;
   margin: 0;
   width: 320px;
+  max-width: 100%;
   padding: 14px;
   color: #1e293b;
   background: #fff;
@@ -59,16 +61,19 @@ label {
 input {
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   margin-top: 4px;
-  padding: 7px 8px;
+  padding: 10px 8px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
+  font-size: 16px;
 }
 
 button {
   margin-top: 12px;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 44px;
+  padding: 10px;
   border: 0;
   border-radius: 6px;
   background: #0f766e;

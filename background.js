@@ -2,6 +2,44 @@ const sessions = new Map();
 const tabArmed = new Map();
 const syncTimers = new Map();
 
+function sessionStore() {
+  return chrome.storage?.session || null;
+}
+
+function persistSession(session) {
+  const store = sessionStore();
+  if (!store || !session?.key) return;
+  const write = store.set({ [`at-session:${session.key}`]: session });
+  if (write?.catch) write.catch(() => {});
+}
+
+function persistArm(tabId, value) {
+  const store = sessionStore();
+  if (!store) return;
+  const name = `at-arm:${tabId}`;
+  const write = value ? store.set({ [name]: value }) : store.remove(name);
+  if (write?.catch) write.catch(() => {});
+}
+
+async function restoreSessions() {
+  const store = sessionStore();
+  if (!store?.get) return;
+  const all = await store.get(null);
+  const now = Date.now();
+  for (const [name, value] of Object.entries(all || {})) {
+    if (name.startsWith('at-session:') && value?.key) {
+      if (value.touched && now - value.touched > 6 * 60 * 60 * 1000) {
+        store.remove(name).catch(() => {});
+        continue;
+      }
+      if (!sessions.has(value.key)) sessions.set(value.key, value);
+    } else if (name.startsWith('at-arm:') && value?.until > now) {
+      const tabId = Number(name.slice('at-arm:'.length));
+      if (!tabArmed.has(tabId)) tabArmed.set(tabId, value);
+    }
+  }
+}
+
 function isMailbox(url) {
   try {
     const parsed = new URL(url);
@@ -133,14 +171,18 @@ function sessionKey(tabId, url) {
 
 function forgetTab(tabId) {
   const prefix = `${tabId}::`;
+  const store = sessionStore();
   for (const key of [...sessions.keys()]) {
-    if (String(key).startsWith(prefix)) sessions.delete(key);
+    if (!String(key).startsWith(prefix)) continue;
+    sessions.delete(key);
+    if (store) store.remove(`at-session:${key}`).catch(() => {});
   }
   tabArmed.delete(tabId);
+  if (store) store.remove(`at-arm:${tabId}`).catch(() => {});
   syncTimers.delete(tabId);
 }
 
-chrome.tabs.onRemoved.addListener(forgetTab);
+chrome.tabs?.onRemoved?.addListener(forgetTab);
 
 function usableTitle(title) {
   const value = String(title || '').trim();
@@ -169,6 +211,7 @@ function ensureSession(tabId, url, title) {
     session.title = nextTitle || usableTitle(session.title);
     session.touched = Date.now();
   }
+  persistSession(session);
   return session;
 }
 
@@ -195,6 +238,7 @@ function storeFields(session, fields) {
       value: String(field.value ?? ''),
     };
   }
+  persistSession(session);
 }
 
 async function rememberFields(tabId, message, sender) {
@@ -229,6 +273,15 @@ function jobLabel(session) {
   return 'Job application';
 }
 
+function notify(id, title, message) {
+  if (!chrome.notifications?.create) return;
+  const iconUrl = chrome.runtime.getURL?.('icons/icon128.png') || '';
+  const options = { type: 'basic', title, message, priority: 2 };
+  if (iconUrl) options.iconUrl = iconUrl;
+  const created = chrome.notifications.create(id, options);
+  if (created?.catch) created.catch(() => {});
+}
+
 function notifyApplied(session) {
   let host = '';
   try {
@@ -237,13 +290,7 @@ function notifyApplied(session) {
     host = '';
   }
   const label = jobLabel(session);
-  chrome.notifications.create(`applied-${session.id}`, {
-    type: 'basic',
-    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-    title: '1 job applied',
-    message: host ? `${label} — ${host}` : label,
-    priority: 2,
-  }).catch(() => {});
+  notify(`applied-${session.id}`, '1 job applied', host ? `${label} — ${host}` : label);
 }
 
 async function send(tabId, session, submitted) {
@@ -286,6 +333,8 @@ async function send(tabId, session, submitted) {
     if (submitted) {
       session.closed = true;
       tabArmed.delete(tabId);
+      persistSession(session);
+      persistArm(tabId, null);
       notifyApplied(session);
     }
     await chrome.storage.local.set({
@@ -357,27 +406,32 @@ async function reportExtensionVersion() {
     await chrome.storage.local.set({ extensionUpdate: { version: payload.version, installed } });
     if (stored.notifiedExtensionVersion === payload.version) return;
     await chrome.storage.local.set({ notifiedExtensionVersion: payload.version });
-    chrome.notifications.create(`extension-update-${EXTENSION_KEY}`, {
-      type: 'basic',
-      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-      title: 'Update Application Track',
-      message: `This copy is v${installed}. Install v${payload.version}. ${extensionDownloadUrl(origin)}`,
-      priority: 2,
-    }).catch(() => {});
+    notify(`extension-update-${EXTENSION_KEY}`, 'Update Application Track', `This copy is v${installed}. Install v${payload.version}. ${extensionDownloadUrl(origin)}`);
   } catch {
     // The server was unreachable.
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => checkExtensionVersion());
-chrome.runtime.onStartup.addListener(() => checkExtensionVersion());
-chrome.alarms.create('extension-version', { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'extension-version') checkExtensionVersion();
-});
+chrome.runtime.onInstalled?.addListener(() => checkExtensionVersion());
+chrome.runtime.onStartup?.addListener(() => checkExtensionVersion());
+if (chrome.alarms?.create && chrome.alarms.onAlarm) {
+  chrome.alarms.create('extension-version', { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'extension-version') checkExtensionVersion();
+  });
+} else {
+  setInterval(() => checkExtensionVersion(), 60000);
+}
 checkExtensionVersion();
 
+const restored = restoreSessions().catch(() => {});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  restored.then(() => handleMessage(message, sender, sendResponse));
+  return true;
+});
+
+function handleMessage(message, sender, sendResponse) {
   const tabId = sender.tab?.id;
   if (message?.type === 'fields' && tabId != null) {
     rememberFields(tabId, message, sender).then((count) => sendResponse({ count }));
@@ -397,7 +451,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : Date.now() + 20000;
       const existing = tabArmed.get(tabId);
       const keep = existing && existing.key === session.key ? existing.until : 0;
-      tabArmed.set(tabId, { key: session.key, until: Math.max(until, keep) });
+      const armed = { key: session.key, until: Math.max(until, keep) };
+      tabArmed.set(tabId, armed);
+      persistArm(tabId, armed);
       sendResponse({ ok: true });
     });
     return true;
@@ -405,14 +461,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'armed-status' && tabId != null) {
     const armed = tabArmed.get(tabId);
     const active = !!armed && armed.until > Date.now();
-    if (armed && !active) tabArmed.delete(tabId);
+    if (armed && !active) {
+      tabArmed.delete(tabId);
+      persistArm(tabId, null);
+    }
     sendResponse({ armed: active, until: active ? armed.until : 0 });
     return false;
   }
   if (message?.type === 'success' && tabId != null) {
     const armed = tabArmed.get(tabId);
     if (!armed || armed.until < Date.now()) {
-      if (armed) tabArmed.delete(tabId);
+      if (armed) {
+        tabArmed.delete(tabId);
+        persistArm(tabId, null);
+      }
       sendResponse({ ok: false, reason: 'not-armed' });
       return false;
     }
@@ -429,6 +491,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (session) {
           next.fields = { ...session.fields, ...next.fields };
           session.closed = true;
+          persistSession(session);
         }
         session = next;
       } else {
@@ -460,7 +523,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'status') {
     const openTabs = new Set([...sessions.keys()].map((key) => String(key).split('::')[0]));
     sendResponse({ tabs: openTabs.size });
-    return false;
   }
-  return false;
-});
+}
