@@ -48,20 +48,65 @@ function cleanText(value) {
   return String(value || '').replace(/\s+/g, ' ').replace(/\s*\*\s*/g, ' ').trim();
 }
 
+function genericLabel(value) {
+  return /^(search|select(?:\.\.\.)?|textbox|empty|drop or select.*|total \d+ files? selected)$/i.test(cleanText(value));
+}
+
+function humanize(value) {
+  const words = cleanText(String(value || '').replace(/[_.:-]+/g, ' '));
+  if (!words || genericLabel(words)) return '';
+  return words.replace(/\b[a-z]/g, (letter) => letter.toUpperCase()).slice(0, 180);
+}
+
+function labelledBy(element) {
+  if (!(element instanceof Element)) return '';
+  const ids = String(element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+  const labelId = ids.find((id) => /-label$/.test(id));
+  if (!labelId) return '';
+  return cleanText(document.getElementById(labelId)?.innerText).slice(0, 180);
+}
+
+function fieldLabelText(field) {
+  if (!(field instanceof Element)) return '';
+  const nodes = field.querySelectorAll('[id$="-label"]');
+  for (const node of nodes) {
+    if (node.closest('[data-testid="field"]') === field) return cleanText(node.innerText).slice(0, 180);
+  }
+  return '';
+}
+
 function labelFor(element) {
+  const direct = labelledBy(element);
+  if (direct && !genericLabel(direct)) return direct;
+  const host = element.closest?.('label');
+  const hostLabel = host ? labelledBy(host) : '';
+  if (hostLabel && !genericLabel(hostLabel)) return hostLabel;
+  const field = element.closest?.('[data-testid="field"]');
+  const fieldLabel = fieldLabelText(field);
+  if (fieldLabel && !genericLabel(fieldLabel)) return fieldLabel;
   const option = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null;
   const optionText = cleanText(option?.innerText);
   const legend = cleanText(element.closest('fieldset')?.querySelector('legend')?.innerText);
   if (legend && optionText && legend !== optionText) return `${legend}: ${optionText}`.slice(0, 180);
-  if (optionText) return optionText.slice(0, 180);
+  if (optionText && !genericLabel(optionText)) return optionText.slice(0, 180);
   const upload = cleanText(element.closest('.file-upload')?.querySelector('.upload-label, .label')?.innerText);
-  if (upload) return upload.slice(0, 180);
+  if (upload && !genericLabel(upload)) return upload.slice(0, 180);
   const wrapping = element.closest('label');
-  if (wrapping) {
+  if (wrapping && !hostLabel) {
     const text = cleanText(wrapping.innerText.replace(element.value || '', ''));
-    if (text) return text.slice(0, 180);
+    if (text && text.length <= 80 && !genericLabel(text)) return text.slice(0, 180);
   }
-  return cleanText(element.getAttribute('aria-label') || element.getAttribute('placeholder')).slice(0, 180);
+  const named = humanize(element.getAttribute?.('data-input') || element.getAttribute?.('data-testid') || '');
+  if (named) return named;
+  const fallback = cleanText(element.getAttribute('aria-label') || element.getAttribute('placeholder'));
+  if (genericLabel(fallback)) {
+    const code = element.closest?.('[data-testid$="-code"]');
+    const outer = code?.parentElement?.closest('[data-testid="field"]');
+    const phoneLabel = fieldLabelText(outer);
+    if (phoneLabel) return `${phoneLabel} country code`.slice(0, 180);
+    return '';
+  }
+  return fallback.slice(0, 180);
 }
 
 function customSelectValue(element) {
@@ -84,7 +129,14 @@ function fieldValue(element) {
   if (chosen) return chosen;
   if (element instanceof HTMLSelectElement) return selectValue(element);
   if (element instanceof HTMLInputElement && element.type === 'file') {
-    return [...(element.files || [])].map((file) => file.name).filter(Boolean).join(', ');
+    const named = [...(element.files || [])].map((file) => file.name).filter(Boolean).join(', ');
+    if (named) return named;
+    const field = element.closest('[data-testid="field"], label') || element.parentElement;
+    const status = cleanText(field?.querySelector('[role="status"]')?.textContent);
+    const uploaded = status.match(/file\s+(.+?)\s+uploaded successfully/i);
+    if (uploaded) return uploaded[1];
+    const chip = field?.querySelector('[data-testid="chip"] [id$="-content"]') || field?.querySelector('[data-testid="chip"]');
+    return cleanText(chip?.textContent).replace(/\bremove\b/ig, '').replace(/\s+/g, ' ').trim();
   }
   if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
     if (!element.checked) return '';
@@ -96,111 +148,50 @@ function fieldValue(element) {
 
 const captured = new Map();
 
-function applicationForm() {
-  const forms = [...document.querySelectorAll('form')];
-  let best = null;
-  let bestCount = 0;
-  for (const form of forms) {
-    const count = form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select').length;
-    if (count > bestCount) {
-      best = form;
-      bestCount = count;
-    }
-  }
-  return best;
+function rememberField(label, name, value) {
+  const cleanLabel = cleanText(label).slice(0, 180);
+  const cleanValue = cleanText(value).slice(0, 2000);
+  if (!cleanLabel || !cleanValue || genericLabel(cleanLabel) || genericLabel(cleanValue)) return;
+  if (/^no files added$/i.test(cleanValue)) return;
+  const cleanName = String(name || '').slice(0, 180);
+  const key = `${cleanLabel}|${cleanName}`;
+  captured.set(key, { key, label: cleanLabel, name: cleanName, value: cleanValue });
 }
 
-function pageStepLabel() {
-  const form = applicationForm();
-  if (!form) return '';
-  const names = [...form.querySelectorAll('input, textarea, select')]
-    .map((element) => element.getAttribute('name') || element.id || '')
-    .filter(Boolean)
-    .slice(0, 40)
-    .join(',');
-  const id = `${location.origin}${location.pathname}?${names}`;
-  let steps = [];
-  try {
-    steps = JSON.parse(sessionStorage.getItem('application-track-steps') || '[]');
-  } catch {
-    steps = [];
-  }
-  if (!Array.isArray(steps)) steps = [];
-  let index = steps.indexOf(id);
-  if (index === -1) {
-    steps.push(id);
-    steps = steps.slice(-30);
-    index = steps.indexOf(id);
-    try {
-      sessionStorage.setItem('application-track-steps', JSON.stringify(steps));
-    } catch {
-      // The page can still be saved when storage is blocked.
-    }
-  }
-  return `Page ${index + 1}`;
-}
-
-function pageHtml() {
-  const form = applicationForm();
-  if (!form) return '';
-  const copy = form.cloneNode(true);
-  copy.querySelectorAll('script, style, noscript, iframe').forEach((node) => node.remove());
-  const liveControls = [...form.querySelectorAll('input, textarea, select')];
-  const copiedControls = [...copy.querySelectorAll('input, textarea, select')];
-  liveControls.forEach((element, index) => {
-    const target = copiedControls[index];
-    if (!target) return;
-    if (element instanceof HTMLInputElement && element.type === 'password') {
-      target.removeAttribute('value');
-      return;
-    }
-    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
-      if (element.checked) target.setAttribute('checked', '');
-      else target.removeAttribute('checked');
-      return;
-    }
-    if (element instanceof HTMLSelectElement) {
-      [...target.options].forEach((option, optionIndex) => {
-        if (element.options[optionIndex]?.selected) option.setAttribute('selected', '');
-        else option.removeAttribute('selected');
-      });
-      return;
-    }
-    const value = element.value || '';
-    target.setAttribute('value', value);
-    if (target.tagName === 'TEXTAREA') target.textContent = value;
+function collectChoices() {
+  document.querySelectorAll('[role="radiogroup"]').forEach((group) => {
+    const chosen = group.querySelector('[role="radio"][aria-checked="true"]');
+    if (!chosen) return;
+    const field = group.closest('[data-testid="field"]');
+    const label = fieldLabelText(field) || humanize(group.getAttribute('data-testid') || '');
+    rememberField(label, group.getAttribute('data-testid') || '', chosen.innerText);
   });
-  return copy.innerHTML.replace(/\s+/g, ' ').trim().slice(0, 20000);
+  document.querySelectorAll('[role="combobox"]').forEach((box) => {
+    if (box instanceof HTMLInputElement || box instanceof HTMLTextAreaElement || box instanceof HTMLSelectElement) return;
+    rememberField(labelFor(box), box.id || '', box.innerText);
+  });
 }
 
 function collect() {
   const domain = domainOf(location.href);
   if (!domain) return;
-  const stepLabel = pageStepLabel();
-  const html = pageHtml();
-  if (stepLabel && html) {
-    captured.set(`page-html:${stepLabel}`, {
-      key: `page-html:${stepLabel}`,
-      label: stepLabel,
-      name: 'page-html',
-      value: html,
-    });
+  for (const key of [...captured.keys()]) {
+    if (String(key).startsWith('page-html:')) captured.delete(key);
   }
   const controls = document.querySelectorAll('input, textarea, select');
   for (const element of controls) {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) continue;
     const type = (element.getAttribute('type') || element.tagName).toLowerCase();
     if (['password', 'hidden', 'submit', 'button', 'image', 'reset', 'search'].includes(type)) continue;
-    if (element.closest('.iti__dropdown-content, .grecaptcha-badge, .picker-dialog')) continue;
+    if (element.closest('[role="radiogroup"], .iti__dropdown-content, .grecaptcha-badge, .picker-dialog')) continue;
     if (element.classList.contains('g-recaptcha-response')) continue;
     const name = element.getAttribute('name') || element.id || '';
     if (/csrf|authenticity|token|recaptcha/i.test(name)) continue;
-    const label = labelFor(element).slice(0, 180);
     const value = fieldValue(element).trim();
-    if (!value && !label && !name) continue;
-    const key = `${name || label}:${type}:${element.id || ''}`;
-    captured.set(key, { key, label: label || name || 'Field', name, value: value.slice(0, 20000) });
+    if (!value) continue;
+    rememberField(labelFor(element), name, value);
   }
+  collectChoices();
   if (captured.size === 0) return;
   chrome.runtime.sendMessage({
     type: 'fields',
