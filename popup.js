@@ -27,7 +27,7 @@ function extensionDownloadUrl(server) {
 }
 
 function extensionMobileUrl(server) {
-  return `${originOf(server) || DEFAULT_SERVER}/api/extensions/application-track/mobile.user.js`;
+  return `${originOf(server) || DEFAULT_SERVER}/api/extensions/application-track/mobile.zip`;
 }
 
 function showDownloadLink(server) {
